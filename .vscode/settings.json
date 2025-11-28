@@ -1,5 +1,7 @@
 {
     "files.associations": {
-        "dtekv-lib.h": "c"
+        "dtekv-lib.h": "c",
+        "compare": "c",
+        "stdlib.h": "c"
     }
 }

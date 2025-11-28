@@ -15,12 +15,14 @@ extern void print_hex32(const unsigned int);
 //  GREEN   CSN (CHIP SELECT)       PIN 2 ([1])
 //  YELLOW  MOSI (MASTER OUTPUT)    PIN 5 ([4])
 //  ORANGE  MISO (MASTER INPUT)     PIN 7 ([6])
+//  WHITE   GPO0                    PIN 6 ([5]) (technically information output pin but we will use for async input)
 
 
 #define SCL_PIN     (1 << 0)
 #define CSN_PIN     (1 << 1)
 #define MOSI_PIN    (1 << 4)
 #define MISO_PIN    (1 << 6)
+#define GDO0_PIN    (1 << 5)
 
 //GPIO PINS ADDRESSES
 volatile unsigned int* data = (unsigned int*)(GPIO_BASE_ADDRESS2 + 0 * 0x4);
@@ -49,11 +51,19 @@ volatile unsigned int* direction = (unsigned int*)(GPIO_BASE_ADDRESS2 + 1 * 0x4)
 #define CC1101_FREQ1 0x0E       // Frequency Control Word, Middle Byte
 #define CC1101_FREQ0 0x0F       // Frequency Control Word, Low Byte
 #define CC1101_MDMCFG2 0x12     // Modem Configuration
+#define CC1101_PKTCTRL0 0x08    //Packet automation control 
+#define CC1101_IOCFG0 0x02      // GDO0 Output Pin Configuration
+
+#define CC1101_FSCTRL1    0x0B
+#define CC1101_FSCTRL0    0x0C
+#define CC1101_MCSM0      0x18
+#define CC1101_DEVIATN    0x15
+#define CC1101_FREND0     0x22
 
 //  something else that we use for setting the power of the transmission
 #define CC1101_PATABLE 0x3E     // PA Power Setting Table
 
-//#define CC1101_IOCFG0 0x02      // GDO0 Output Pin Configuration
+
 
 void delay(int amount) { //volatile prevents optimising away loop
     for (volatile int i = 0; i < amount; i++)
@@ -90,7 +100,7 @@ unsigned int get_data(int pins) {
 
 void spi_init(){
     //config GPIO pins
-    set_direction(SCL_PIN | CSN_PIN | MOSI_PIN, 1);
+    set_direction(SCL_PIN | CSN_PIN | MOSI_PIN | GDO0_PIN, 1);
     set_direction(MISO_PIN, 0);
     
     //Set chip select high
@@ -173,85 +183,162 @@ void write_reg_CC1101(unsigned char address, unsigned char content) {
     
 }
 
+void print_bi(unsigned char byte) {
+    for (int i = 0; i < 8; i++)
+    {   
+        if (byte>>7 == 0b1)
+        {
+            print("1");
+        }
+        else{
+            print("0");
+        }
+        byte = byte << 1;
+    }
+    print("\n");
+}
 
 
+int main() { //testing wav upload and reading
+    // ./dtekv-upload <path to file> 0x20000000
+    // 0x20000000 is the start of the general
+    // 0x40000000 is the start of the reserved part of the memory, do NOT write to the reserved part
+
+    //nevermind that is wrong, the lecture wasn't using accurate numbers
+    //SDRAM (64 MB)	0x00000000-0x03ffffff
+    // we will be uploading it to 0x00100000, giving 1 mb to the program before it starts overwriting our saved data
+    // ./dtekv-upload <path to file> 0x00100000
+
+    //read the first byte:
+    /*int base_file_address = 0x00100000;
+    for (int i = 0; i < 4; i++)
+    {
+        volatile unsigned char* data = (unsigned char*)(base_file_address + i);
+        print_bi(*data);
+    }
+
+    //get header info
+    volatile unsigned int *data = (unsigned int*)base_file_address;
+    int data_byte_amount = data[10];
+    print_dec(data_byte_amount);*/
+    
+    int base_file_address = 0x00100000;
+
+    //get header info
+    volatile unsigned char *data = (unsigned char*)base_file_address;
+    int data_byte_amount = *(unsigned int*)(&data[40]);
+    print_dec(data_byte_amount);
+    
 
 
-int main() {
     //setup communication with peripheral
     spi_init();
 
     //reset peripheral
     reset_CC1101();
+
+
     
-    //configure before starting transmission
-    //set the 433 frequency
-    //  here is how the frequency is calculated
-    //      f = ( fxosc / 2^16 ) * control_word
-    //  control_word is what we put into the FREQ registers
-    //  we want f to be 433 Mhz, fxosc is roughly 26 Mhz (i think, it says so on the chip)
-    //      433 = (26 / 2^16) * c
-    //      => c = 1 091 426.462
-    //      convert to hex: c = 0x10A762
+
+
+
+
+    //sets GDO0 as "Serial Data Output"
+    //makes it become the input for the slave
+    write_reg_CC1101(CC1101_IOCFG0, 0x0D); 
+
+
+    //sets to format=3 (Asynchronous Serial Mode)
+    //turns off packet handling, just transmits GDO0 pin data
+    write_reg_CC1101(CC1101_PKTCTRL0, 0x32);
+
+   
+    //setting to 2-FSK, FM mode
+    write_reg_CC1101(CC1101_MDMCFG2, 0b01000000);
+
+
+    //write_reg_CC1101(CC1101_FREQ2, 0x10);
+    //write_reg_CC1101(CC1101_FREQ1, 0xB1);
+    //write_reg_CC1101(CC1101_FREQ0, 0x3B);
+    
+    //freq
     //higher byte
     write_reg_CC1101(CC1101_FREQ2, 0x10);
     //middle byte
-    write_reg_CC1101(CC1101_FREQ2, 0xA7);
+    write_reg_CC1101(CC1101_FREQ1, 0xA7);
     //lower byte
-    write_reg_CC1101(CC1101_FREQ2, 0x62);
+    write_reg_CC1101(CC1101_FREQ0, 0x62);
 
-    //config for OOK (on off keying)
-    write_reg_CC1101(CC1101_MDMCFG2, 0x30);
-    //write_reg_CC1101(CC1101_IO, 0x2E); //maybe add later
+    //setting deviation
+    //controls volume/bandwidth 0x47 = 47kHz deviation
+    //if too low => quiet audio and if too high => distortion.
+    write_reg_CC1101(CC1101_DEVIATN, 0x47); 
 
-    //set the power output to maximum
-    write_reg_CC1101(CC1101_PATABLE, 0xC0);
+    //
+    write_reg_CC1101(CC1101_MCSM0, 0x18);
+
+    //power
+    set_data(CSN_PIN, 0);
+    spi_transfer(CC1101_PATABLE); 
+    spi_transfer(0xC0);           
+    set_data(CSN_PIN, 1);
+
+
+
+
 
     //flush the transmit buffer 
     //  i don't know exactly what this does but it is good practice and I think there is like a buffer of data which we want to be empty
     send_strobe(CC1101_SFTX);
-
-
-    //Play a melody (happy birthday currently):
-
-    //int freqs[] = {261, 261, 294, 261, 349, 330, 261, 261, 294, 261, 392, 349, 261, 261, 523, 440, 349, 330, 294, 440, 440, 349, 392, 349};
-    //int freqs[] = {100, 700, 300, 400};
-    int freqs[] = {3780, 3780, 3354, 3780, 2827, 2986, 3780, 3780, 3354, 3780, 2515, 2827, 3780, 3780, 1885, 2241, 2827, 2986, 3354, 2241, 2241, 2827, 2515, 2827};
-    int timer = 0;
-    int on = 1;
-    int i = 0;
     
+    //turn on
+    send_strobe(CC1101_STX);
 
+
+
+    
+    unsigned int accumulator = 0;
+    unsigned char sample = 128; //start with silence
+    int i = 44; //skip header
+    
+    
+    int loops_per_sample = 110; 
+
+    print("Transmitting:\n");
+
+    
+    set_direction(GDO0_PIN, 1); 
 
     while (1) {
-        for (int j = 0; j < (int)(500000/freqs[i]); j++)
-        {
-            //turn transmission on
-            send_strobe(CC1101_STX);
-            
-            delay(freqs[i]);
-
-            //turn transmission off
-            send_strobe(CC1101_SIDLE);
-            
-            delay(freqs[i]);
-        }
-        for (int j = 0; j < (int)(20000/freqs[i]); j++) //silence between notes
-        {
-            delay(freqs[i]);
-            delay(freqs[i]);
+        if (i < data_byte_amount + 44) {
+            sample = data[i];
+        } 
+        else {
+            //restart
+            i = 44; 
+            sample = 150;
+            print("Looping\n");
+            //loops_per_sample++;
+            print_dec(loops_per_sample);
+            print("\n");
         }
 
+       
+        for (int k = 0; k < loops_per_sample; k++) {
+            
+            accumulator += sample;
+
+            if (accumulator >= 255) {
+                set_data(GDO0_PIN, 1); //output high freq
+                accumulator -= 255;
+            } else {
+                set_data(GDO0_PIN, 0); //output low freq
+            }
+        }
 
         i++;
-        if (i >= 24)
-        {
-            i = 0;
-        }
     }
-
-
-
-    return 0;
 }
+
+
 
