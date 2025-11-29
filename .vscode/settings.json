@@ -2,6 +2,7 @@
     "files.associations": {
         "dtekv-lib.h": "c",
         "compare": "c",
-        "stdlib.h": "c"
+        "stdlib.h": "c",
+        "pthread.h": "c"
     }
 }

@@ -1,3 +1,6 @@
+#include <pthread.h>
+//we need multithreading to detect file uploads, could maybe use interupts instead?
+
 extern void print(const char*);
 extern void print_dec(const unsigned int);
 extern void print_hex32(const unsigned int);
@@ -63,6 +66,12 @@ volatile unsigned int* direction = (unsigned int*)(GPIO_BASE_ADDRESS2 + 1 * 0x4)
 //  something else that we use for setting the power of the transmission
 #define CC1101_PATABLE 0x3E     // PA Power Setting Table
 
+
+//memory that gets allocated for each audio file
+#define FILE_ALLOC_SIZE 0x00500000
+//address where you upload files
+#define FILE_UPLOAD_BASE_ADDRESS 0x00100000
+#define FILE_UPLOAD_BASE_ADDRESS_NON_CACHE 0xA0100000
 
 
 void delay(int amount) { //volatile prevents optimising away loop
@@ -198,6 +207,89 @@ void print_bi(unsigned char byte) {
     print("\n");
 }
 
+unsigned char is_new_file(){
+    volatile unsigned char *file_data = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS_NON_CACHE;
+    //legit such bullshit i spent so long to find that the cache is wrong and you have to specify that it shouldn't read the cache
+    //  if you don't use the NON_CACHE one it won't work because the cache is not updated and doesn't update when we upload the file
+    //      might be something to write about in the report
+
+    if (file_data[0] == 0b11111111)
+    {
+        return 0;
+    }
+    else {
+        return 1; //new file
+    }
+}
+
+void transfer_new_file(volatile unsigned char file_amount){
+    
+    //wait until file has finished uploading
+    delay(5000000);
+    //not optimal since we cannot garantee that this is the actual amount of time the upload took
+    //TODO: make it based on the data_byte_amount
+
+    //get header info
+    volatile unsigned char *file_data = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS;
+
+
+    int data_byte_amount = *(unsigned int*)(&file_data[40]);
+    print_dec(data_byte_amount);
+
+
+    //first we will copy over the file from the upload section
+    //  the upload section is 0x00100000-0x00600000
+    //      meaning that the file size limit is 5mb
+    for (int i = 0; i < data_byte_amount+44; i++)
+    {
+        //copy the value of the uploaded file to its allocated location
+        file_data[file_amount * FILE_ALLOC_SIZE + i] = file_data[i];
+    }
+
+
+    //clear the first byte
+    //  setting the first byte to 0b11111111 so that we can detect when it changes
+    //      i chose 0b11111111 because a wav file should never start with that binary sequence
+    file_data[0] = 0b11111111;
+}
+
+
+void transmit_current_file(int current_file) {
+    int base_file_address = 0x00100000;
+
+    //get header info
+    volatile unsigned char *file_data = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS;
+    int data_byte_amount = *(unsigned int*)(&file_data[current_file * FILE_ALLOC_SIZE + 40]);
+    print_dec(data_byte_amount);
+    
+    unsigned int accumulator = 0;
+    unsigned char sample = 128; //start with silence
+    
+    int loops_per_sample = 110; 
+
+    print("Transmitting audio:\n");
+
+    
+    for (int i = 44; i < data_byte_amount+44; i++)
+    {            
+        sample = file_data[current_file * FILE_ALLOC_SIZE + i];
+
+        for (int k = 0; k < loops_per_sample; k++) {
+            
+            accumulator += sample;
+
+            if (accumulator >= 255) {
+                set_data(GDO0_PIN, 1); //output high freq
+                accumulator -= 255;
+            } else {
+                set_data(GDO0_PIN, 0); //output low freq
+            }
+        }
+    }
+    
+}
+
+
 
 int main() { //testing wav upload and reading
     // ./dtekv-upload <path to file> 0x20000000
@@ -222,12 +314,9 @@ int main() { //testing wav upload and reading
     int data_byte_amount = data[10];
     print_dec(data_byte_amount);*/
     
-    int base_file_address = 0x00100000;
+    unsigned char file_amount = 0;
+    int current_file = 1;
 
-    //get header info
-    volatile unsigned char *data = (unsigned char*)base_file_address;
-    int data_byte_amount = *(unsigned int*)(&data[40]);
-    print_dec(data_byte_amount);
     
 
 
@@ -294,49 +383,46 @@ int main() { //testing wav upload and reading
     //turn on
     send_strobe(CC1101_STX);
 
+    set_direction(GDO0_PIN, 1); 
+    
+    //transfer_new_file(file_amount);
 
 
+    volatile unsigned char *file_data = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS;
+    //clear the first byte
+    //  setting the first byte to 0b11111111 so that we can detect when it changes
+    //      i chose 0b11111111 because a wav file should never start with that binary sequence
+    file_data[0] = 0b11111111;
     
-    unsigned int accumulator = 0;
-    unsigned char sample = 128; //start with silence
-    int i = 44; //skip header
     
-    
-    int loops_per_sample = 110; 
 
     print("Transmitting:\n");
 
     
-    set_direction(GDO0_PIN, 1); 
+    
 
-    while (1) {
-        if (i < data_byte_amount + 44) {
-            sample = data[i];
-        } 
+    while (1)
+    {
+        if (file_amount>0)
+        {   
+            transmit_current_file(current_file);   
+        }
+        if (is_new_file())
+        {
+            //there is a new file
+            file_amount++;
+            transfer_new_file(file_amount);
+        }   
+
+        //since we don't have a meny yet this changes which file it is
+        if (current_file<file_amount)
+        {
+            current_file++;
+        }
         else {
-            //restart
-            i = 44; 
-            sample = 150;
-            print("Looping\n");
-            //loops_per_sample++;
-            print_dec(loops_per_sample);
-            print("\n");
+            current_file = 1;
         }
-
-       
-        for (int k = 0; k < loops_per_sample; k++) {
-            
-            accumulator += sample;
-
-            if (accumulator >= 255) {
-                set_data(GDO0_PIN, 1); //output high freq
-                accumulator -= 255;
-            } else {
-                set_data(GDO0_PIN, 0); //output low freq
-            }
-        }
-
-        i++;
+        
     }
 }
 
