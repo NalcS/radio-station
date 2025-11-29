@@ -92,9 +92,6 @@ int morse_generate(const char* s, MorseSignal* out, int max_len) {
 
 
 
-int main() {
-    return 0;
-}
 
 
 // TODO: fixa meny, moduläritet i main programmet.
