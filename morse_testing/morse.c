@@ -1,6 +1,7 @@
 #include "morse.h"
 
-// --- Morse helpers ---
+
+// --- Morse tabell ---
 typedef struct { char c; const char* morse; } MorseEntry;
 static const MorseEntry morse_table[] = {
     {'A', ".-"}, {'B', "-..."}, {'C', "-.-."}, {'D', "-.."},
@@ -13,82 +14,80 @@ static const MorseEntry morse_table[] = {
     {'1', ".----"},{'2', "..---"},{'3', "...--"},{'4', "....-"},
     {'5', "....."},{'6', "-...."},{'7', "--..."},{'8', "---.."},
     {'9', "----."},{'0', "-----"},
-    {' ', " "} // space as word gap
+    {' ', " "}  // ord-mellanrum
 };
-static const int morse_table_len = sizeof(morse_table)/sizeof(morse_table[0]);
+static const int morse_table_len = sizeof(morse_table)/sizeof(MorseEntry);
 
-const char* lookup_morse(char ch) {
-    if (ch >= 'a' && ch <= 'z') ch -= 32; // uppercase
-    for (int i = 0; i < morse_table_len; i++) {
-        if (morse_table[i].c == ch) return morse_table[i].morse;
-    }
-    return ""; // unknown -> silence
-}
-
-// unit in ms for dot
 #define MORSE_UNIT_MS 120
 
-void send_morse_string(const char* s) {
-    for (const char* p = s; *p; p++) {
-        const char* code = lookup_morse(*p);
-        if (code[0] == '\0') {
-            // unknown - short pause
-            play_tone(0, MORSE_UNIT_MS * 3);
-            continue;
-        }
-        if (code[0] == ' ') {
-            // word gap
-            play_tone(0, MORSE_UNIT_MS * 7);
-            continue;
-        }
-        // for each symbol in code
-        for (const char* sym = code; *sym; sym++) {
-            if (*sym == '.') {
-                play_tone(600, MORSE_UNIT_MS); // dot: 1 unit
-            } else if (*sym == '-') {
-                play_tone(600, MORSE_UNIT_MS * 3); // dash: 3 units
-            }
-            // gap between elements
-            play_tone(0, MORSE_UNIT_MS);
-        }
-        // gap between letters
-        play_tone(0, MORSE_UNIT_MS * 2); // total between letters = 3 units
+// --- Lokal delay för morse ---
+static void morse_delay_ms(int ms) {
+    // 1 ms ≈ 40000 iterationer i er clock/loop
+    for (volatile int i = 0; i < ms * 40000; i++);
+}
+
+// --- Generera ca 600 Hz bärvåg på GDO0 ---
+static void morse_tone(int freq_hz, int duration_ms) {
+    if (freq_hz <= 0) {
+        // Tystnad
+        set_data(GDO0_PIN, 0);
+        morse_delay_ms(duration_ms);
+        return;
+    }
+
+    // Enkel kvadratvågsgenerator
+    int cycles = duration_ms * freq_hz;
+    int half_period_delay = (1000 / freq_hz) / 2; // ms per halva
+
+    for (int i = 0; i < cycles; i++) {
+        set_data(GDO0_PIN, 1);
+        morse_delay_ms(half_period_delay);
+
+        set_data(GDO0_PIN, 0);
+        morse_delay_ms(half_period_delay);
     }
 }
 
-int morse_generate(const char* s, MorseSignal* out, int max_len) {
-    int n = 0;
+static const char* lookup_morse(char c) {
+    if (c >= 'a' && c <= 'z') c -= 32; // uppercase
+    for (int i = 0; i < morse_table_len; i++) {
+        if (morse_table[i].c == c)
+            return morse_table[i].morse;
+    }
+    return "";  // okänd → tyst
+}
 
-    for (const char* p = s; *p && n < max_len; p++) {
+void morse_send_string(const char* text) {
+    for (const char* p = text; *p; p++) {
+
         const char* code = lookup_morse(*p);
 
         if (code[0] == '\0') {
-            out[n++] = (MorseSignal){0, MORSE_UNIT_MS * 3};
+            // okänd symbol
+            morse_tone(0, MORSE_UNIT_MS * 3);
             continue;
         }
-
         if (code[0] == ' ') {
-            out[n++] = (MorseSignal){0, MORSE_UNIT_MS * 7};
+            // ordmellanrum
+            morse_tone(0, MORSE_UNIT_MS * 7);
             continue;
         }
 
-        for (const char* sym = code; *sym && n < max_len; sym++) {
-            if (*sym == '.') {
-                out[n++] = (MorseSignal){600, MORSE_UNIT_MS};
-            } else if (*sym == '-') {
-                out[n++] = (MorseSignal){600, MORSE_UNIT_MS * 3};
+        // varje tecken
+        for (const char* s = code; *s; s++) {
+            if (*s == '.') {
+                morse_tone(600, MORSE_UNIT_MS);           // dot
+            } else if (*s == '-') {
+                morse_tone(600, MORSE_UNIT_MS * 3);       // dash
             }
-            if (n < max_len) {
-                out[n++] = (MorseSignal){0, MORSE_UNIT_MS};
-            }
+            morse_tone(0, MORSE_UNIT_MS);                 // mellan element
         }
-        if (n < max_len) {
-            out[n++] = (MorseSignal){0, MORSE_UNIT_MS * 2};
-        }
-    }
 
-    return n; // antal element
+        // mellan bokstäver: totalt 3 enheter → 1 enhet har redan körts
+        morse_tone(0, MORSE_UNIT_MS * 2);
+    }
 }
+
 
 
 
