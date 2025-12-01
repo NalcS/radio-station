@@ -84,13 +84,7 @@ void morse_send_string(const char* text) {
         }
 
         // mellan bokstäver: totalt 3 enheter → 1 enhet har redan körts
-        morse_tone(0, MORSE_UNIT_MS * 2);
+        morse_tone(0, MORSE_UNIT_MS * 3);
     }
 }
 
-
-
-
-
-
-// TODO: fixa meny, moduläritet i main programmet.
