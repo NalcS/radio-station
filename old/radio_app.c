@@ -71,6 +71,27 @@ volatile unsigned int* direction = (unsigned int*)(GPIO_BASE_ADDRESS2 + 1 * 0x4)
 #define FILE_UPLOAD_BASE_ADDRESS_NON_CACHE 0xA0100000
 
 
+//performance analysis tools:
+// only using the lower one because it isn't that long time periods we run this over
+void clear_cycle_count(){
+    asm volatile ("csrw mcycle, 0x0"); //use in-line assembly to clear the mcycle register
+}
+int get_cycle_count(){
+    int cycle_count = 0;
+    asm("csrr   %0, mcycle": "r="(cycle_count));
+    return cycle_count;
+}
+void clear_instr_count(){
+    asm volatile ("csrw minstret, 0x0");
+}
+int get_instr_count(){
+    int instr_count = 0;
+    asm("csrr   %0, minstret": "r="(instr_count));
+    return instr_count;
+}
+
+
+
 void delay(int amount) { //volatile prevents optimising away loop
     for (volatile int i = 0; i < amount; i++)
     {
@@ -266,6 +287,7 @@ void transmit_current_file(int current_file) {
 
     print("Transmitting audio:\n");
 
+
     
     for (int i = 44; i < data_byte_amount+44; i++)
     {            
@@ -283,6 +305,14 @@ void transmit_current_file(int current_file) {
             }
         }
     }
+
+    //int cycle_amount = get_cycle_count();
+
+    print("\n");
+    print("cycles: ");
+    //print_dec(cycle_amount);
+    print("\n");
+
     
 }
 
