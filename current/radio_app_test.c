@@ -354,20 +354,8 @@ int get_btn( void ) {
 
 
 // MORSE HELPERS
-unsigned char is_new_text() {
-    volatile unsigned char* file_data = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS_NON_CACHE;
 
-    // text file starts with 0xFF if no new text
-    if (file_data[0] == 0xFF)
-        return 0;   // no new text file
-    return 1;       // new text file
-}
-
-
-
-//MORSE TEMP COPY
-
-// --- Morse tabell ---
+// Morse table
 typedef struct { char c; const char* morse; } MorseEntry;
 static const MorseEntry morse_table[] = {
     {'A', ".-"}, {'B', "-..."}, {'C', "-.-."}, {'D', "-.."},
@@ -380,50 +368,29 @@ static const MorseEntry morse_table[] = {
     {'1', ".----"},{'2', "..---"},{'3', "...--"},{'4', "....-"},
     {'5', "....."},{'6', "-...."},{'7', "--..."},{'8', "---.."},
     {'9', "----."},{'0', "-----"},
-    {' ', " "}  // ord-mellanrum
+    {' ', " "}  // word spaces
 };
 static const int morse_table_len = sizeof(morse_table)/sizeof(MorseEntry);
 
-#define MORSE_UNIT_MS 12
+#define MORSE_UNIT_MS 12 // base time unit in milliseconds
 
-// --- Lokal delay för morse ---
+// --- Local delay for morse ---
 static void morse_delay_ms(int ms) {
-    // 1 ms ≈ 40000 iterationer i er clock/loop
+    // 1 ms ≈ 40000 iterations in clock/loop
     for (volatile int i = 0; i < ms * 40000; i++);
 }
 
-// --- Generera ca 600 Hz bärvåg på GDO0 ---
-static void morse_tone1(int freq_hz, int duration_ms) {
-    if (freq_hz <= 0) {
-        // Tystnad
-        set_data(GDO0_PIN, 0);
-        morse_delay_ms(duration_ms);
-        return;
-    }
 
-    // Enkel kvadratvågsgenerator
-    int cycles = duration_ms * freq_hz;
-    int half_period_delay = (1000 / freq_hz) / 2; // ms per halva
-
-    for (int i = 0; i < cycles; i++) {
-        set_data(GDO0_PIN, 1);
-        morse_delay_ms(half_period_delay);
-
-        set_data(GDO0_PIN, 0);
-        morse_delay_ms(half_period_delay);
-    }
-}
-
-// --- Generera ca 600 Hz bärvåg på GDO0 ---
+// Generate ~600 Hz standing wave on GDO0
 static void morse_tone(int freq_hz, int duration_ms) {
     if (freq_hz <= 0) {
-        // Tystnad
+        // Silence
         set_data(GDO0_PIN, 0);
         morse_delay_ms(duration_ms);
         return;
     }
 
-    // Enkel kvadratvågsgenerator
+    // Simple square wave generator
     int cycles = duration_ms * freq_hz;
 
     for (int i = 0; i < cycles; i++) {
@@ -441,7 +408,7 @@ static const char* lookup_morse(char c) {
         if (morse_table[i].c == c)
             return morse_table[i].morse;
     }
-    return "";  // okänd → tyst
+    return "";  // unknown → silence
 }
 
 void morse_send_string(const char* text) {
@@ -450,56 +417,29 @@ void morse_send_string(const char* text) {
         const char* code = lookup_morse(*p);
 
         if (code[0] == '\0') {
-            // okänd symbol
+            // unknown symbol
             morse_tone(0, MORSE_UNIT_MS * 3);
             continue;
         }
         if (code[0] == ' ') {
-            // ordmellanrum
+            // word space
             morse_tone(0, MORSE_UNIT_MS * 7);
             continue;
         }
 
-        // varje tecken
+        // each character
         for (const char* s = code; *s; s++) {
             if (*s == '.') {
                 morse_tone(10, MORSE_UNIT_MS);           // dot
             } else if (*s == '-') {
                 morse_tone(10, MORSE_UNIT_MS * 3);       // dash
             }
-            morse_tone(0, MORSE_UNIT_MS);                 // mellan element
+            morse_tone(0, MORSE_UNIT_MS);                 // between elements
         }
 
-        // mellan bokstäver: totalt 3 enheter → 1 enhet har redan körts
+        // between letters: total 3 units → 1 unit has already been sent
         morse_tone(0, MORSE_UNIT_MS * 3);
     }
-}
-
-//END
-
-
-
-
-void transfer_new_text(int text_index) {
-
-    volatile unsigned char* src = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS;
-    volatile unsigned char* dst = (unsigned char*)(FILE_UPLOAD_BASE_ADDRESS + text_index * FILE_ALLOC_SIZE);
-
-    // Wait until the upload is complete 
-    delay(500000); //this one is relativly short as the fiels are expected to be relativly short, as compared to the size of an audio file
-
-    // Copy until we find a NULL byte
-    int i = 0;
-    while (src[i] != 0 && i < FILE_ALLOC_SIZE-1) {
-        dst[i] = src[i];
-        i++;
-    }
-
-    // Add NULL termination in destination
-    dst[i] = 0;
-
-    // Mark as done – set upload first byte to FE
-    src[0] = 0xFF;
 }
 
 
@@ -511,16 +451,11 @@ void transmit_text_file(int index) {
 }
 
 
-
-
 int main() {
-    
-    
+        
     int file_amount = 0;
     int current_file = 0;
     int playing = 0;
-
-    
 
 
     spi_init();
@@ -531,7 +466,6 @@ int main() {
 
     set_direction(GDO0_PIN, 1); 
     
-
 
     volatile unsigned char *file_data = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS;
     file_data[0] = 0b11111111;
