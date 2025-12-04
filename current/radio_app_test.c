@@ -195,7 +195,6 @@ unsigned char is_new_file(){
 }
 
 void transfer_new_file(volatile unsigned char file_amount){
-    
     delay(10000); //wait for header info to be uploaded
 
     
@@ -208,13 +207,45 @@ void transfer_new_file(volatile unsigned char file_amount){
     delay(data_byte_amount*10); //wait appropriate amount
 
     
-    for (int i = 0; i < data_byte_amount+44; i++)
+    for (int i = 0; i < 44; i++)
     {
         file_data[file_amount * FILE_ALLOC_SIZE + i] = file_data[i];
     }
 
 
     file_data[0] = 0b11111111;
+}
+
+void transfer_new_text(int text_index) {
+
+    volatile unsigned char* src = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS;
+    volatile unsigned char* dst = (unsigned char*)(FILE_UPLOAD_BASE_ADDRESS + text_index * FILE_ALLOC_SIZE);
+
+    // Wait until the upload is complete 
+    delay(500000); //this one is relativly short as the fiels are expected to be relativly short, as compared to the size of an audio file
+
+    // Copy until we find a NULL byte
+    int i = 0;
+    while (src[i] != 0 && i < FILE_ALLOC_SIZE-1) {
+        dst[i] = src[i];
+        i++;
+    }
+
+    print_dec(i);
+    print("\n");
+
+    for (int j = 0; j < i; j++)
+    {
+        print_bi(dst[j]);
+        print("\n");
+    }
+    
+
+    // Add NULL termination in destination
+    dst[i] = 0;
+
+    // Mark as done – set upload first byte to FE
+    src[0] = 0xFF;
 }
 
 
@@ -253,6 +284,7 @@ void transmit_current_file(int current_file) {
             }
         }
     }
+    print("End of transmission\n");
     
 }
 
@@ -352,6 +384,11 @@ int get_btn( void ) {
   return return_value;
 }
 
+void set_leds(int led_mask){
+  volatile int* leds;
+  leds = (int*) (0x04000000);
+  *leds = led_mask; 
+}
 
 // MORSE HELPERS
 
@@ -412,9 +449,18 @@ static const char* lookup_morse(char c) {
 }
 
 void morse_send_string(const char* text) {
-    for (const char* p = text; *p; p++) {
+    
+    for (int i = 1; text[i]; i++) {
 
-        const char* code = lookup_morse(*p);
+        const char* code = lookup_morse(text[i]);
+        print("\ni: ");
+        print_dec(i);
+        print("\n");
+        print(code);
+        print("\n");
+        print_bi(text[i]);
+        print("\n");
+        
 
         if (code[0] == '\0') {
             // unknown symbol
@@ -485,6 +531,7 @@ int main() {
         int file_select = sw & 0x1FF;         // SW0-8 = file select
 
         if (get_btn() && file_amount > 0 && current_file > 0) {
+            set_leds(0b0001111000);
             if (!morse_mode) {
                 transmit_current_file(current_file); // Wav
             } else {
@@ -495,7 +542,16 @@ int main() {
         if (is_new_file())
         {
             file_amount++;
-            transfer_new_file(file_amount);
+            if (file_data[7]==0x0 && file_data[8]==0b01010111) //is wav
+            {
+                transfer_new_file(file_amount);
+            }
+            else {
+                //treat as text file
+                //print("TXT\n");
+                transfer_new_text(file_amount);
+            }
+            
         }
 
         if (file_amount >= file_select) 
@@ -511,6 +567,13 @@ int main() {
         set_displays(2, -1);
         set_displays(3, -1);
         set_displays(5, -1);
+
+        if (morse_mode){
+            set_leds(0b1110000000);
+        } else {
+            set_leds(0B0000000111);
+        }
+        
         delay(10000);
     }
 }
