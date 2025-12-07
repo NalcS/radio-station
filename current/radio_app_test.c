@@ -3,6 +3,14 @@ extern void print_dec(const unsigned int);
 extern void print_hex32(const unsigned int);
 
 
+//Emrik contributed 
+//  with the audio file broadcasting system, using pulse density modulation, and the audio file upload system.
+
+//Edvard contributed 
+//  with the Morse encoding and parsing, along with text file transfer/transmit systems.
+
+
+
 
 #define GPIO_BASE_ADDRESS2 0x040000e0
 
@@ -13,13 +21,24 @@ extern void print_hex32(const unsigned int);
 #define MOSI_PIN    (1 << 4)
 #define MISO_PIN    (1 << 6)
 #define GDO0_PIN    (1 << 5)
+//  PINS:
+//  BLACK   GROUND                  PIN 30 (GND)
+//  RED     VCC (POWER)             PIN 29 (3.3 V)
+//  BROWN   SCL (CLOCK)             PIN 1 ([0])
+//  GREEN   CSN (CHIP SELECT)       PIN 2 ([1])
+//  YELLOW  MOSI (MASTER OUTPUT)    PIN 5 ([4])
+//  ORANGE  MISO (MASTER INPUT)     PIN 7 ([6])
+//  WHITE   GPO0                    PIN 6 ([5]) (technically information output pin but we will use for async input)
 
 
+//GPIO PINS ADDRESSES
 volatile unsigned int* data = (unsigned int*)(GPIO_BASE_ADDRESS2 + 0 * 0x4);
 volatile unsigned int* direction = (unsigned int*)(GPIO_BASE_ADDRESS2 + 1 * 0x4);
 
 
-
+//CC1101 STUFF:
+//  COMMAND STROBES
+//      source: https://www.ti.com/lit/ds/symlink/cc1101.pdf
 #define CC1101_SRES 0x30        
 #define CC1101_SFSTXON 0x31     
 #define CC1101_SXOFF 0x32       
@@ -52,9 +71,9 @@ volatile unsigned int* direction = (unsigned int*)(GPIO_BASE_ADDRESS2 + 1 * 0x4)
 #define CC1101_PATABLE 0x3E     
 
 
-
+//memory that gets allocated for each audio file
 #define FILE_ALLOC_SIZE 0x00500000
-
+//address where you upload files
 #define FILE_UPLOAD_BASE_ADDRESS 0x00100000
 #define FILE_UPLOAD_BASE_ADDRESS_NON_CACHE 0xA0100000
 
@@ -93,10 +112,12 @@ unsigned int get_data(int pins) {
 }
 
 void spi_init(){
+    //config GPIO pins
     set_direction(SCL_PIN | CSN_PIN | MOSI_PIN | GDO0_PIN, 1);
     set_direction(MISO_PIN, 0);
-    
+    //Set chip select high
     set_data(CSN_PIN, 1);
+    //set clock to low
     set_data(SCL_PIN, 0);
 
 }
@@ -106,8 +127,10 @@ unsigned char spi_transfer(unsigned char send_byte)
 
     unsigned char received_byte;
 
+    //send each bit in the byte (and read each from MISO)
     for (int i = 0; i < 8; i++) 
     {
+        //write data
         if (send_byte>>7) 
         {
             set_data(MOSI_PIN, 1);
@@ -117,11 +140,12 @@ unsigned char spi_transfer(unsigned char send_byte)
         }
         send_byte = send_byte << 1; 
 
-
+        //set clock high
         set_data(SCL_PIN, 1);
 
         delay(10);
 
+        //read input
         if (get_data(MISO_PIN) == MISO_PIN) 
         {
             received_byte |= 0b1;
@@ -151,6 +175,7 @@ void reset_CC1101(){
     delay(10);
     set_data(CSN_PIN, 1);
     delay(10);
+    //send reset command strobe
     send_strobe(CC1101_SRES);
     delay(1000);
 
@@ -184,7 +209,8 @@ void print_bi(unsigned char byte) {
 
 unsigned char is_new_file(){
     volatile unsigned char *file_data = (unsigned char*)FILE_UPLOAD_BASE_ADDRESS_NON_CACHE;
-
+    //if you don't use the NON_CACHE one it won't work because the cache is not updated and doesn't update when we upload the file
+    
     if (file_data[0] == 0b11111111)
     {
         return 0;
@@ -257,28 +283,32 @@ void transmit_current_file(int current_file) {
 }
 
 void config_CC1101() {
-
+    //sets GDO0 as "Serial Data Output"
+    //makes it become the input for the slave
     write_reg_CC1101(CC1101_IOCFG0, 0x0D); 
 
 
-
+    //sets to format=3 (Asynchronous Serial Mode)
+    //turns off packet handling, just transmits GDO0 pin data
     write_reg_CC1101(CC1101_PKTCTRL0, 0x32);
 
    
-
+    //setting to 4-FSK, FM mode
     write_reg_CC1101(CC1101_MDMCFG2, 0b01000000);
     
-
+    //setting the freq
     write_reg_CC1101(CC1101_FREQ2, 0x10);
 
     write_reg_CC1101(CC1101_FREQ1, 0xA7);
 
     write_reg_CC1101(CC1101_FREQ0, 0x62);
 
+    //setting the deviation
     write_reg_CC1101(CC1101_DEVIATN, 0x47); 
 
     write_reg_CC1101(CC1101_MCSM0, 0x18);
 
+    //power
     set_data(CSN_PIN, 0);
     spi_transfer(CC1101_PATABLE); 
     spi_transfer(0xC0);           
@@ -290,7 +320,11 @@ void config_CC1101() {
     send_strobe(CC1101_STX);
 }
 
-
+void set_leds(int led_mask){
+  volatile int* leds;
+  leds = (int*) (0x04000000);
+  *leds = led_mask; 
+}
 
 
 void set_displays(int display_number, int value){
@@ -522,9 +556,10 @@ int main() {
 
     
 
-
+    //setup communication with peripheral
     spi_init();
 
+    //reset peripheral
     reset_CC1101();
 
     config_CC1101();
@@ -550,7 +585,8 @@ int main() {
         int morse_mode = (sw & (1 << 9)) != 0;   // SW9 = Morse mode
         int file_select = sw & 0x1FF;         // SW0-8 = file select
 
-        if (get_btn() && file_amount > 0 && current_file > 0) {
+        //if (get_btn() && file_amount > 0 && current_file > 0) {
+        if (get_btn()) {
             if (!morse_mode) {
                 transmit_current_file(current_file); // Wav
             } else {
@@ -564,11 +600,11 @@ int main() {
             transfer_new_file(file_amount);
         }
 
-        if (file_amount >= file_select) 
-        {
+        //if (file_amount >= file_select) 
+        //{
             current_file = file_select;
             
-        }
+        //}
 
         set_displays(0, current_file);
         set_displays(4, file_amount);
@@ -577,6 +613,8 @@ int main() {
         set_displays(2, -1);
         set_displays(3, -1);
         set_displays(5, -1);
-        delay(10000);
+
+
+        delay(10000); //debounce protection, without it there are strange bugs I think due to the hardware 
     }
 }
